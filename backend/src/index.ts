@@ -220,17 +220,17 @@ app.patch('/quests/:id', async (req, res) => {
     const result = await prisma.$transaction(async (tx) => {
       const quest = await tx.quest.findUniqueOrThrow({ where: { id } })
       if (quest.status === status) {
-        return { quest, leveledUp: false } // done->done or open->open: no-op, idempotent
+        return { quest, skill: null, leveledUp: false } // done->done or open->open: no-op, idempotent
       }
       const updatedQuest = await tx.quest.update({ where: { id }, data: { status } })
       if (quest.skillId === null) {
         // skill was never linked, or the skill was cascade-deleted (SetNull) — no XP either direction
-        return { quest: updatedQuest, leveledUp: false }
+        return { quest: updatedQuest, skill: null, leveledUp: false }
       }
       const xpAwarded = status === 'done' ? QUEST_XP : -QUEST_XP
       const description = status === 'done' ? `Quest: ${quest.title}` : `Reverted quest: ${quest.title}`
-      const { leveledUp } = await awardXp(tx, quest.skillId, description, xpAwarded)
-      return { quest: updatedQuest, leveledUp }
+      const { skill, leveledUp } = await awardXp(tx, quest.skillId, description, xpAwarded)
+      return { quest: updatedQuest, skill: { ...skill, level: levelFromXp(skill.xp) }, leveledUp }
     })
     res.json(result)
   } catch {
