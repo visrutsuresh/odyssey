@@ -41,10 +41,14 @@ app.post('/skills', async (req, res) => {
   if (typeof name !== 'string' || name.trim() === '') {
     return res.status(400).json({ error: 'name is required' })
   }
-  const skill = await prisma.skill.create({
-    data: { name, description: typeof description === 'string' ? description : '' },
-  })
-  res.status(201).json({ ...skill, level: levelFromXp(skill.xp) })
+  try {
+    const skill = await prisma.skill.create({
+      data: { name, description: typeof description === 'string' ? description : '' },
+    })
+    res.status(201).json({ ...skill, level: levelFromXp(skill.xp) })
+  } catch {
+    res.status(409).json({ error: 'a skill with that name already exists' })
+  }
 })
 
 app.patch('/skills/:id', async (req, res) => {
@@ -59,7 +63,10 @@ app.patch('/skills/:id', async (req, res) => {
   try {
     const skill = await prisma.skill.update({ where: { id }, data })
     res.json({ ...skill, level: levelFromXp(skill.xp) })
-  } catch {
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return res.status(409).json({ error: 'a skill with that name already exists' })
+    }
     res.status(404).json({ error: 'skill not found' })
   }
 })
@@ -165,8 +172,12 @@ app.post('/bossfight', async (req, res) => {
   if (typeof weekStart !== 'string' || typeof title !== 'string' || title.trim() === '') {
     return res.status(400).json({ error: 'weekStart and title are required' })
   }
+  const parsedWeekStart = parseValidDate(weekStart)
+  if (!parsedWeekStart) {
+    return res.status(400).json({ error: 'weekStart must be a valid date' })
+  }
   const bossfight = await prisma.bossFight.create({
-    data: { weekStart: new Date(weekStart), title, description: typeof description === 'string' ? description : '' },
+    data: { weekStart: parsedWeekStart, title, description: typeof description === 'string' ? description : '' },
   })
   res.status(201).json(bossfight)
 })
@@ -187,25 +198,35 @@ app.patch('/bossfight/:id', async (req, res) => {
 
 const QUEST_XP = 25
 
+function parseValidDate(value: unknown): Date | null {
+  if (typeof value !== 'string') return null
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
 app.get('/quests', async (req, res) => {
-  const date = req.query.date
-  if (typeof date !== 'string') {
+  const parsedDate = parseValidDate(req.query.date)
+  if (!parsedDate) {
     return res.status(400).json({ error: 'date query param is required (YYYY-MM-DD)' })
   }
-  const quests = await prisma.quest.findMany({ where: { date: new Date(date) }, orderBy: { id: 'asc' } })
+  const quests = await prisma.quest.findMany({ where: { date: parsedDate }, orderBy: { id: 'asc' } })
   res.json(quests)
 })
 
 app.post('/quests', async (req, res) => {
   const { date, title, skillId } = req.body
-  if (typeof date !== 'string' || typeof title !== 'string' || title.trim() === '') {
-    return res.status(400).json({ error: 'date and title are required' })
+  if (typeof title !== 'string' || title.trim() === '') {
+    return res.status(400).json({ error: 'title is required' })
+  }
+  const parsedDate = parseValidDate(date)
+  if (!parsedDate) {
+    return res.status(400).json({ error: 'date must be a valid date (YYYY-MM-DD)' })
   }
   if (skillId !== undefined && skillId !== null && typeof skillId !== 'number') {
     return res.status(400).json({ error: 'skillId must be a number or null' })
   }
   const quest = await prisma.quest.create({
-    data: { date: new Date(date), title, skillId: skillId ?? null },
+    data: { date: parsedDate, title, skillId: skillId ?? null },
   })
   res.status(201).json(quest)
 })
