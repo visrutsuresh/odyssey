@@ -34,3 +34,12 @@ model Activity {
   xpAwarded   Int
   loggedAt    DateTime @default(now())
 }
+
+// status: "active" | "won" | "lost" — plain String, no enum migration fuss (ponytail)
+model BossFight {
+  id          Int      @id @default(autoincrement())
+  weekStart   DateTime
+  title       String
+  description String   @default("")
+  status      String   @default("active")
+}

@@ -94,6 +94,90 @@ app.get('/activities', async (req, res) => {
   res.json(activities)
 })
 
+// hardcoded SGT (Asia/Singapore) day-bucketing — revisit when CEO relocates Aug 13;
+// loggedAt is stored as a real UTC instant, so the later fix is display-only (no migration)
+function sgtDateStr(d: Date): string {
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' })
+}
+
+function parseDateStr(dateStr: string): [number, number, number] {
+  const parts = dateStr.split('-').map(Number)
+  return [parts[0] ?? 0, parts[1] ?? 1, parts[2] ?? 1]
+}
+
+function addDays(dateStr: string, delta: number): string {
+  const [y, m, day] = parseDateStr(dateStr)
+  const dt = new Date(Date.UTC(y, m - 1, day))
+  dt.setUTCDate(dt.getUTCDate() + delta)
+  return dt.toISOString().slice(0, 10)
+}
+
+function daysBetween(a: string, b: string): number {
+  const [ay, am, ad] = parseDateStr(a)
+  const [by, bm, bd] = parseDateStr(b)
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000)
+}
+
+function computeStreak(activityDays: string[]): { current: number; longest: number } {
+  const days = new Set(activityDays)
+  if (days.size === 0) return { current: 0, longest: 0 }
+
+  const sorted = [...days].sort()
+  let longest = 1
+  let run = 1
+  for (let i = 1; i < sorted.length; i++) {
+    run = daysBetween(sorted[i - 1] as string, sorted[i] as string) === 1 ? run + 1 : 1
+    longest = Math.max(longest, run)
+  }
+
+  const today = sgtDateStr(new Date())
+  const yesterday = addDays(today, -1)
+  let cursor = days.has(today) ? today : days.has(yesterday) ? yesterday : null
+  let current = 0
+  while (cursor) {
+    current += 1
+    const prevDay = addDays(cursor, -1)
+    cursor = days.has(prevDay) ? prevDay : null
+  }
+  return { current, longest }
+}
+
+app.get('/streak', async (_req, res) => {
+  const activities = await prisma.activity.findMany({ select: { loggedAt: true } })
+  const activityDays = activities.map((a) => sgtDateStr(a.loggedAt))
+  res.json(computeStreak(activityDays))
+})
+
+app.get('/bossfight/current', async (_req, res) => {
+  const bossfight = await prisma.bossFight.findFirst({ orderBy: { weekStart: 'desc' } })
+  res.json(bossfight)
+})
+
+app.post('/bossfight', async (req, res) => {
+  const { weekStart, title, description } = req.body
+  if (typeof weekStart !== 'string' || typeof title !== 'string' || title.trim() === '') {
+    return res.status(400).json({ error: 'weekStart and title are required' })
+  }
+  const bossfight = await prisma.bossFight.create({
+    data: { weekStart: new Date(weekStart), title, description: typeof description === 'string' ? description : '' },
+  })
+  res.status(201).json(bossfight)
+})
+
+app.patch('/bossfight/:id', async (req, res) => {
+  const id = Number(req.params.id)
+  const { status } = req.body
+  if (!['won', 'lost', 'active'].includes(status)) {
+    return res.status(400).json({ error: 'status must be won, lost, or active' })
+  }
+  try {
+    const bossfight = await prisma.bossFight.update({ where: { id }, data: { status } })
+    res.json(bossfight)
+  } catch {
+    res.status(404).json({ error: 'boss fight not found' })
+  }
+})
+
 const PORT = 3001
 app.listen(PORT, () => {
   console.log(`Odyssey backend listening on port ${PORT}`)
