@@ -259,6 +259,14 @@ app.patch('/quests/:id', async (req, res) => {
   }
 })
 
+const errorHandler: express.ErrorRequestHandler = (err, _req, res, _next) => {
+  const isBodyParseError = err instanceof SyntaxError && ((err as { type?: string }).type === 'entity.parse.failed' || (err as { status?: number }).status === 400)
+  if (isBodyParseError) return res.status(400).json({ error: 'invalid JSON body' })
+  console.error(err)
+  res.status(500).json({ error: 'internal error' })
+}
+app.use(errorHandler)
+
 const PORT = 3001
 app.listen(PORT, () => {
   console.log(`Odyssey backend listening on port ${PORT}`)
