@@ -18,9 +18,19 @@ model Ping {
 }
 
 model Skill {
+  id          Int        @id @default(autoincrement())
+  name        String     @unique
+  description String     @default("")
+  xp          Int        @default(0)
+  createdAt   DateTime   @default(now())
+  activities  Activity[]
+}
+
+model Activity {
   id          Int      @id @default(autoincrement())
-  name        String   @unique
-  description String   @default("")
-  xp          Int      @default(0)
-  createdAt   DateTime @default(now())
+  skillId     Int
+  skill       Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  description String
+  xpAwarded   Int
+  loggedAt    DateTime @default(now())
 }

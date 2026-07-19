@@ -60,6 +60,40 @@ app.delete('/skills/:id', async (req, res) => {
   }
 })
 
+app.post('/activities', async (req, res) => {
+  const { skillId, description, xpAwarded } = req.body
+  if (typeof skillId !== 'number' || typeof description !== 'string' || description.trim() === '') {
+    return res.status(400).json({ error: 'skillId and description are required' })
+  }
+  if (typeof xpAwarded !== 'number' || xpAwarded <= 0) {
+    return res.status(400).json({ error: 'xpAwarded must be a positive number' })
+  }
+  try {
+    const [activity, skill] = await prisma.$transaction([
+      prisma.activity.create({ data: { skillId, description, xpAwarded } }),
+      prisma.skill.update({ where: { id: skillId }, data: { xp: { increment: xpAwarded } } }),
+    ])
+    const levelBefore = levelFromXp(skill.xp - xpAwarded)
+    const levelAfter = levelFromXp(skill.xp)
+    res.status(201).json({
+      activity,
+      skill: { ...skill, level: levelAfter },
+      leveledUp: levelAfter > levelBefore,
+    })
+  } catch {
+    res.status(404).json({ error: 'skill not found' })
+  }
+})
+
+app.get('/activities', async (req, res) => {
+  const limit = Number(req.query.limit) || 20
+  const activities = await prisma.activity.findMany({
+    orderBy: { loggedAt: 'desc' },
+    take: limit,
+  })
+  res.json(activities)
+})
+
 const PORT = 3001
 app.listen(PORT, () => {
   console.log(`Odyssey backend listening on port ${PORT}`)
