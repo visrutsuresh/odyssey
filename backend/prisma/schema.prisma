@@ -24,6 +24,7 @@ model Skill {
   xp          Int        @default(0)
   createdAt   DateTime   @default(now())
   activities  Activity[]
+  quests      Quest[]
 }
 
 model Activity {
@@ -42,4 +43,14 @@ model BossFight {
   title       String
   description String   @default("")
   status      String   @default("active")
+}
+
+// status: "open" | "done" — plain String, no enum migration fuss (ponytail)
+model Quest {
+  id      Int      @id @default(autoincrement())
+  date    DateTime
+  title   String
+  status  String   @default("open")
+  skillId Int?
+  skill   Skill?   @relation(fields: [skillId], references: [id], onDelete: SetNull)
 }

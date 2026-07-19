@@ -2,11 +2,25 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { PrismaPg } from '@prisma/adapter-pg'
-import { PrismaClient } from './generated/prisma/client.js'
+import { PrismaClient, Prisma } from './generated/prisma/client.js'
 import { levelFromXp } from './xp.js'
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL })
 const prisma = new PrismaClient({ adapter })
+
+// shared award path: create the Activity row + atomically increment the skill's xp.
+// used by POST /activities and the quest-toggle award/reversal (same code, same guarantees).
+async function awardXp(
+  tx: Prisma.TransactionClient,
+  skillId: number,
+  description: string,
+  xpAwarded: number,
+) {
+  const activity = await tx.activity.create({ data: { skillId, description, xpAwarded } })
+  const skill = await tx.skill.update({ where: { id: skillId }, data: { xp: { increment: xpAwarded } } })
+  const leveledUp = levelFromXp(skill.xp) > levelFromXp(skill.xp - xpAwarded)
+  return { activity, skill, leveledUp }
+}
 
 const app = express()
 app.use(cors())
@@ -69,17 +83,10 @@ app.post('/activities', async (req, res) => {
     return res.status(400).json({ error: 'xpAwarded must be a positive number' })
   }
   try {
-    const [activity, skill] = await prisma.$transaction([
-      prisma.activity.create({ data: { skillId, description, xpAwarded } }),
-      prisma.skill.update({ where: { id: skillId }, data: { xp: { increment: xpAwarded } } }),
-    ])
-    const levelBefore = levelFromXp(skill.xp - xpAwarded)
-    const levelAfter = levelFromXp(skill.xp)
-    res.status(201).json({
-      activity,
-      skill: { ...skill, level: levelAfter },
-      leveledUp: levelAfter > levelBefore,
-    })
+    const { activity, skill, leveledUp } = await prisma.$transaction((tx) =>
+      awardXp(tx, skillId, description, xpAwarded),
+    )
+    res.status(201).json({ activity, skill: { ...skill, level: levelFromXp(skill.xp) }, leveledUp })
   } catch {
     res.status(404).json({ error: 'skill not found' })
   }
@@ -175,6 +182,59 @@ app.patch('/bossfight/:id', async (req, res) => {
     res.json(bossfight)
   } catch {
     res.status(404).json({ error: 'boss fight not found' })
+  }
+})
+
+const QUEST_XP = 25
+
+app.get('/quests', async (req, res) => {
+  const date = req.query.date
+  if (typeof date !== 'string') {
+    return res.status(400).json({ error: 'date query param is required (YYYY-MM-DD)' })
+  }
+  const quests = await prisma.quest.findMany({ where: { date: new Date(date) }, orderBy: { id: 'asc' } })
+  res.json(quests)
+})
+
+app.post('/quests', async (req, res) => {
+  const { date, title, skillId } = req.body
+  if (typeof date !== 'string' || typeof title !== 'string' || title.trim() === '') {
+    return res.status(400).json({ error: 'date and title are required' })
+  }
+  if (skillId !== undefined && skillId !== null && typeof skillId !== 'number') {
+    return res.status(400).json({ error: 'skillId must be a number or null' })
+  }
+  const quest = await prisma.quest.create({
+    data: { date: new Date(date), title, skillId: skillId ?? null },
+  })
+  res.status(201).json(quest)
+})
+
+app.patch('/quests/:id', async (req, res) => {
+  const id = Number(req.params.id)
+  const { status } = req.body
+  if (!['open', 'done'].includes(status)) {
+    return res.status(400).json({ error: 'status must be open or done' })
+  }
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const quest = await tx.quest.findUniqueOrThrow({ where: { id } })
+      if (quest.status === status) {
+        return { quest, leveledUp: false } // done->done or open->open: no-op, idempotent
+      }
+      const updatedQuest = await tx.quest.update({ where: { id }, data: { status } })
+      if (quest.skillId === null) {
+        // skill was never linked, or the skill was cascade-deleted (SetNull) — no XP either direction
+        return { quest: updatedQuest, leveledUp: false }
+      }
+      const xpAwarded = status === 'done' ? QUEST_XP : -QUEST_XP
+      const description = status === 'done' ? `Quest: ${quest.title}` : `Reverted quest: ${quest.title}`
+      const { leveledUp } = await awardXp(tx, quest.skillId, description, xpAwarded)
+      return { quest: updatedQuest, leveledUp }
+    })
+    res.json(result)
+  } catch {
+    res.status(404).json({ error: 'quest not found' })
   }
 })
 
