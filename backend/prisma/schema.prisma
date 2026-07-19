@@ -16,3 +16,11 @@ model Ping {
   id      Int    @id @default(autoincrement())
   message String
 }
+
+model Skill {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String   @default("")
+  xp          Int      @default(0)
+  createdAt   DateTime @default(now())
+}
